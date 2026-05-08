@@ -59,7 +59,7 @@ interface SubagentTokenUsage {
 	cacheWrite: number
 }
 
-interface SubagentResult {
+export interface SubagentResult {
 	exitCode: number
 	accumulated: string
 	stderr: string
@@ -240,7 +240,7 @@ export function prepareChildSessionFile(
 	return { sessionId, sessionFile }
 }
 
-function getSubagentInvocation(args: string[]): { command: string; args: string[] } {
+export function getSubagentInvocation(args: string[]): { command: string; args: string[] } {
 	// Bun single-file binary: process.execPath IS the self-contained binary and the entry script is baked in, so we spawn with just the CLI args. Do NOT prepend process.argv[1] — it's a virtual /$bunfs/... path that only exists inside this process's embedded filesystem, and the child would either error or misread it as a positional arg.
 	if (isBunBinary) {
 		return { command: process.execPath, args }
@@ -313,7 +313,52 @@ export function parseSubagentEvent(line: string): ParsedSubagentEvent {
 	return empty
 }
 
-function spawnSubagent(
+/**
+ * Simplified spawnSubagent interface for one-shot subagent invocations.
+ * Builds the invocation, collects output, and returns the accumulated text.
+ */
+export async function spawnSubagent(params: {
+	prompt: string
+	model: string
+	provider?: string
+	cwd?: string
+	signal?: AbortSignal
+	tokenBudget?: number
+}): Promise<string> {
+	const cwd = params.cwd ?? process.cwd()
+	const provider = params.provider ?? "kimchi-dev"
+
+	const args = buildSubagentArgs({ provider, model: params.model, prompt: params.prompt }, [], collectExtensionArgs())
+	const invocation = getSubagentInvocation(args)
+
+	let accumulated = ""
+	const result = await spawnSubagentInternal(
+		invocation,
+		cwd,
+		params.signal,
+		params.tokenBudget,
+		INACTIVITY_TIMEOUT_MS,
+		(text) => {
+			accumulated = text
+		},
+		() => {
+			// ignore tool calls in simple mode
+		},
+	)
+
+	if (result.failureReason !== undefined || result.exitCode !== 0) {
+		const error = result.stderr.trim() || accumulated || "(no output)"
+		throw new Error(`Subagent failed: ${error}`)
+	}
+
+	return accumulated
+}
+
+/**
+ * Internal spawnSubagent (renamed to avoid naming conflict with the convenience wrapper).
+ * @deprecated Use the simplified spawnSubagent({ prompt, model }) instead.
+ */
+export function spawnSubagentInternal(
 	invocation: { command: string; args: string[] },
 	cwd: string,
 	signal: AbortSignal | undefined,
@@ -689,7 +734,7 @@ export default function (pi: ExtensionAPI) {
 			const tokenBudget = params.tokenBudget !== undefined ? Number(params.tokenBudget) : undefined
 			const inactivityTimeoutMs =
 				params.inactivityTimeoutMs !== undefined ? Number(params.inactivityTimeoutMs) : INACTIVITY_TIMEOUT_MS
-			const { exitCode, accumulated, stderr, tokenUsage, failureReason, durationMs } = await spawnSubagent(
+			const { exitCode, accumulated, stderr, tokenUsage, failureReason, durationMs } = await spawnSubagentInternal(
 				invocation,
 				ctx.cwd,
 				signal,

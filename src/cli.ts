@@ -19,7 +19,9 @@ import bashCollapseExtension from "./extensions/bash-collapse.js"
 import behavioursExtension from "./extensions/behaviours/index.js"
 import clipboardImageExtension from "./extensions/clipboard-image.js"
 import contextCompactorExtension from "./extensions/context-compactor.js"
+import curatorExtension from "./extensions/curator/index.js"
 import hideThinkingExtension from "./extensions/hide-thinking.js"
+import improveExtension from "./extensions/improve/index.js"
 import kimchiMinimalTintsExtension from "./extensions/kimchi-minimal-tints.js"
 import loginExtension from "./extensions/login/index.js"
 import loopGuardExtension from "./extensions/loop-guard.js"
@@ -30,6 +32,7 @@ import permissionsExtension from "./extensions/permissions/index.js"
 import { reserveShiftTabForPermissions } from "./extensions/permissions/keybindings.js"
 import promptSummaryExtension from "./extensions/prompt-summary.js"
 import shutdownMarkerExtension from "./extensions/shutdown-marker.js"
+import skillsManagerExtension from "./extensions/skills-manager/index.js"
 import startupUpdateExtension from "./extensions/startup-update.js"
 // import statsExtension from "./extensions/stats/index.js"
 import subagentExtension from "./extensions/subagent.js"
@@ -278,6 +281,9 @@ try {
 			webFetchExtension,
 			webSearchExtension,
 			loginExtension,
+			skillsManagerExtension,
+			improveExtension,
+			curatorExtension,
 		]
 
 		const rawArgs = process.argv.slice(2)
