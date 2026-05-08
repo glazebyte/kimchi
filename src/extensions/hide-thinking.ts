@@ -116,6 +116,10 @@ function applyStreamingDisplay(text: string, hideThinking: boolean): string {
 	return result
 }
 
+export function filterThinkingForDisplay(text: string): string {
+	return applyStreamingDisplay(text, readHideThinkingSetting())
+}
+
 // ---------------------------------------------------------------------------
 // Shadow map — transformed display text → original text with thinking tags.
 // Used by the context handler to restore originals before LLM calls.
