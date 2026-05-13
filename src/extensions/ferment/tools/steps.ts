@@ -212,15 +212,19 @@ Do NOT call start_step again without user input.`,
 			? `\n\n⚠️  Previous step (${prevStep.index}: "${prevStep.description}") received grade ${prevStep.grade.grade}: ${prevStep.grade.rationale}. Apply extra scrutiny to this step — verify edge cases, error handling, and completeness before reporting done.`
 			: ""
 
-	const parallelSiblings = freshStep?.canRunParallel
-		? (freshPhase?.steps ?? [])
-				.filter((st) => st.id !== step.id && st.status === "pending" && st.canRunParallel)
-				.map((st) => ({
-					step_id: st.id,
-					description: st.description,
-					worker_model: st.workerModel ?? "minimax-m2.7",
-				}))
-		: []
+	const parallelSiblings =
+		freshStep?.parallel && freshStep.groupIndex !== undefined
+			? (freshPhase?.steps ?? [])
+					.filter(
+						(st) =>
+							st.id !== step.id && st.status === "pending" && st.parallel && st.groupIndex === freshStep.groupIndex,
+					)
+					.map((st) => ({
+						step_id: st.id,
+						description: st.description,
+						worker_model: st.workerModel ?? "minimax-m2.7",
+					}))
+			: []
 
 	const parallelNote =
 		parallelSiblings.length > 0

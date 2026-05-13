@@ -65,7 +65,8 @@ export function buildFsmContext(f: Ferment | undefined | null): FermentFsmContex
 				index: s.index,
 				description: s.description,
 				status: s.status,
-				canRunParallel: s.canRunParallel ?? false,
+				parallel: s.parallel ?? false,
+				groupIndex: s.groupIndex,
 			})),
 		})),
 	}

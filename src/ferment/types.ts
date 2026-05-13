@@ -123,6 +123,21 @@ export interface JudgeGrade {
 
 export type StepStatus = "pending" | "running" | "done" | "skipped" | "verified" | "failed"
 
+/** True when both items are members of the same non-singleton parallel group.
+ *  Shared by the transition state machine (Step) and the FSM (StepContext)
+ *  since both carry the same parallel/groupIndex pair.
+ *
+ *  Set `KIMCHI_FERMENT_DISABLE_PARALLEL=1` to globally collapse all parallel
+ *  cohorts back to sequential execution — useful when investigating issues
+ *  that might stem from concurrency. */
+export function inSameParallelCohort(
+	a: { parallel?: boolean; groupIndex?: number },
+	b: { parallel?: boolean; groupIndex?: number },
+): boolean {
+	if (process.env.KIMCHI_FERMENT_DISABLE_PARALLEL === "1") return false
+	return !!a.parallel && !!b.parallel && a.groupIndex !== undefined && a.groupIndex === b.groupIndex
+}
+
 export interface Step {
 	id: string
 	index: number // 1-based
@@ -136,8 +151,12 @@ export interface Step {
 	workerModel?: "minimax-m2.7" | "kimi-k2.5"
 	/** Whether this step requires vision (images/screenshots). Determines worker model selection. */
 	needsVision?: boolean
-	/** Whether this step can run in parallel with other canRunParallel steps in the same phase. */
-	canRunParallel?: boolean
+
+	// Parallel execution — symmetric with Phase. Steps that share groupIndex
+	// inside the same phase run concurrently; `parallel` is the derived "this
+	// step is a member of a cohort of size ≥ 2" flag.
+	parallel?: boolean
+	groupIndex?: number
 
 	verification?: Verification
 	result?: StepResult // populated on completion/verification
