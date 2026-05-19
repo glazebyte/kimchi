@@ -47,6 +47,7 @@ describe("buildSystemPrompt", () => {
 	const tools = [
 		{ name: "read", description: "Read file contents" },
 		{ name: "bash", description: "Execute bash commands" },
+		{ name: "Agent", description: "Launch a specialized agent" },
 		{ name: "subagent", description: "Spawn an isolated subagent process" },
 	]
 
@@ -64,10 +65,10 @@ describe("buildSystemPrompt", () => {
 			expect(result).toContain("## Guidelines")
 			expect(result).toContain("Orchestrate the work")
 			expect(result).toContain("Sharing context between agents")
-			expect(result).toContain("Subagent delegation rules")
+			expect(result).toContain("Agent delegation rules")
 			expect(result).toContain("Model selection for delegation")
 			expect(result).toContain("Token budgets")
-			expect(result).toContain("Inactivity timeout")
+			expect(result).toContain("token_budget")
 		})
 
 		it("includes all tool names and descriptions", () => {
@@ -77,6 +78,7 @@ describe("buildSystemPrompt", () => {
 				mode: "orchestrator",
 			})
 			expect(result).toContain('<tool name="read">')
+			expect(result).toContain('<tool name="Agent">')
 			expect(result).toContain('<tool name="subagent">')
 		})
 
@@ -237,12 +239,13 @@ describe("buildSystemPrompt", () => {
 	})
 
 	describe("subagent mode", () => {
-		it("excludes the subagent tool", () => {
+		it("excludes delegation tools", () => {
 			const result = buildSystemPrompt({
 				tools,
 				env: testEnv,
 				mode: "subagent",
 			})
+			expect(result).not.toContain('<tool name="Agent">')
 			expect(result).not.toContain("subagent")
 		})
 
@@ -274,13 +277,16 @@ describe("buildSystemPrompt", () => {
 				env: testEnv,
 				mode: "subagent",
 			})
-			expect(result).not.toContain("Subagent delegation rules")
+			expect(result).not.toContain("Agent delegation rules")
 			expect(result).not.toContain("Model selection for delegation")
 		})
 
-		it("handles tools list with only the subagent tool", () => {
+		it("handles tools list with only delegation tools", () => {
 			const result = buildSystemPrompt({
-				tools: [{ name: "subagent", description: "Spawn" }],
+				tools: [
+					{ name: "Agent", description: "Launch" },
+					{ name: "subagent", description: "Spawn" },
+				],
 				env: testEnv,
 				mode: "subagent",
 			})
@@ -350,7 +356,7 @@ describe("buildSystemPrompt", () => {
 				env: testEnv,
 				mode: "single",
 			})
-			expect(result).not.toContain("Subagent delegation rules")
+			expect(result).not.toContain("Agent delegation rules")
 			expect(result).not.toContain("Model selection for delegation")
 			expect(result).not.toContain("Token budgets")
 			expect(result).not.toContain("Orchestrate the work")

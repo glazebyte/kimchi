@@ -6,15 +6,15 @@
  *
  * Main model mode:
  * - "input": wraps the user prompt with the current model's own capabilities
- *   and the available subagent models so the model can self-classify the task
+ *   and the available delegated-agent models so the model can self-classify the task
  *   and decide which steps to execute itself vs. delegate.
  * - "before_agent_start": injects the self-classification system prompt with
- *   full tool access (read, write, edit, bash, subagent).
+ *   full tool access, including the active delegation tool.
  *
  * Subagent mode:
  * - "input": passes through unchanged.
  * - "before_agent_start": injects the pure worker system prompt. Filters out
- *   the subagent tool to prevent infinite delegation chains.
+ *   delegation tools to prevent infinite delegation chains.
  *
  * Steering messages are excluded — when the agent is streaming, the handler
  * returns "continue" so the message passes through unchanged.
@@ -114,6 +114,12 @@ function readMultiModelArgv(): boolean {
 }
 
 let multiModelEnabled = readMultiModelArgv()
+
+const DELEGATION_TOOL_NAMES = new Set(["Agent", "subagent"])
+
+function isDelegationToolCallName(name: string | undefined): boolean {
+	return name != null && DELEGATION_TOOL_NAMES.has(name)
+}
 
 export const MULTI_MODEL_SHORTCUT = "alt+m"
 
@@ -241,8 +247,8 @@ export default function (skillPaths: string[]) {
 			})
 
 			// Detect the inverse of the context-event nudge below: the orchestrator reasons
-			// in prose, announces it will delegate, and ends its turn without emitting the
-			// `subagent` tool call. The agent loop would otherwise exit and wait for another
+			// in prose, announces it will delegate, and ends its turn without emitting a
+			// delegation tool call. The agent loop would otherwise exit and wait for another
 			// user prompt. Nudge once per user-input cycle, and only when no tool has fired
 			// that cycle — so genuine end-of-task summaries are left alone. Mirrors AISI
 			// Inspect's `on_continue`.
@@ -283,11 +289,11 @@ export default function (skillPaths: string[]) {
 			pi.on("turn_end", async (event) => {
 				if (event.message.role !== "assistant") return
 
-				// Mark each subagent tool call so the continuation nudge stays
-				// suppressed until all subagent results have been received.
-				// A single turn may contain multiple parallel subagent calls.
+				// Mark each delegation tool call so the continuation nudge stays
+				// suppressed until all delegated-agent results have been received.
+				// A single turn may contain multiple parallel agent calls.
 				for (const c of event.message.content) {
-					if (c.type === "toolCall" && (c as { name?: string }).name === "subagent") {
+					if (c.type === "toolCall" && isDelegationToolCallName((c as { name?: string }).name)) {
 						continuationNudge.markSubagentCall()
 					}
 				}
