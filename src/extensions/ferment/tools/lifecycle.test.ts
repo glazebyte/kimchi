@@ -304,6 +304,148 @@ describe("scopeFerment", () => {
 	})
 })
 
+describe("propose_ferment_scoping via registerLifecycleTools", () => {
+	function createProposeHarness() {
+		const h = createHarness()
+		const tools = new Map<string, RegisteredTool>()
+		const pi = {
+			...h.pi,
+			registerTool: (tool: RegisteredTool) => {
+				tools.set(tool.name, tool)
+			},
+			getActiveTools: vi.fn(() => ["read", "bash"]),
+			getAllTools: vi.fn(() => [{ name: "read" }, { name: "bash" }]),
+			setActiveTools: vi.fn(),
+		} as unknown as ExtensionAPI
+		registerLifecycleTools(pi, h.runtime)
+
+		const tool = tools.get("propose_ferment_scoping")
+		if (!tool) throw new Error("propose_ferment_scoping not registered")
+		const execute = tool.execute as unknown as (
+			...args: unknown[]
+		) => Promise<{ content: { text: string }[]; isError?: boolean }>
+		return { h, execute }
+	}
+
+	it("normalizes canonical question fields before runtime validation", async () => {
+		const { h, execute } = createProposeHarness()
+
+		const result = await execute(
+			"tool-call-1",
+			{
+				ferment_id: h.fermentId,
+				goal: "Ship the feature",
+				phases: [{ name: "Build", goal: "Implement", steps: [{ description: "Code it" }] }],
+				questions: [
+					{
+						id: "q1",
+						question: "Which path?",
+						options: [
+							{ id: "a", label: "A", recommended: true },
+							{ id: "b", label: "B" },
+						],
+					},
+				],
+				gates: passingPlanGates(),
+			},
+			undefined,
+			undefined,
+			{ ui: {} },
+		)
+
+		expect(errText(result)).toContain("Cannot ask scoping questions without an interactive UI")
+		expect(errText(result)).not.toContain("questions.0.question")
+	})
+
+	it("rejects prompt because question is the only public question text field", async () => {
+		const { h, execute } = createProposeHarness()
+
+		const result = await execute(
+			"tool-call-1",
+			{
+				ferment_id: h.fermentId,
+				goal: "Ship the feature",
+				phases: [{ name: "Build", goal: "Implement", steps: [{ description: "Code it" }] }],
+				questions: [
+					{
+						id: "q1",
+						prompt: "Which path?",
+						options: [
+							{ id: "a", label: "A", recommended: true },
+							{ id: "b", label: "B" },
+						],
+					},
+				],
+				gates: passingPlanGates(),
+			},
+			undefined,
+			undefined,
+			{ ui: {} },
+		)
+
+		expect(errText(result)).toContain("questions.0.question must be a string")
+	})
+
+	it("allows empty question because the schema only requires a string", async () => {
+		const { h, execute } = createProposeHarness()
+
+		const result = await execute(
+			"tool-call-1",
+			{
+				ferment_id: h.fermentId,
+				goal: "Ship the feature",
+				phases: [{ name: "Build", goal: "Implement", steps: [{ description: "Code it" }] }],
+				questions: [
+					{
+						id: "q1",
+						question: "",
+						options: [
+							{ id: "a", label: "A", recommended: true },
+							{ id: "b", label: "B" },
+						],
+					},
+				],
+				gates: passingPlanGates(),
+			},
+			undefined,
+			undefined,
+			{ ui: {} },
+		)
+
+		expect(errText(result)).toContain("Cannot ask scoping questions without an interactive UI")
+		expect(errText(result)).not.toContain("questions.0.question must be a string")
+	})
+
+	it("rejects text because question is the only public question text field", async () => {
+		const { h, execute } = createProposeHarness()
+
+		const result = await execute(
+			"tool-call-1",
+			{
+				ferment_id: h.fermentId,
+				goal: "Ship the feature",
+				phases: [{ name: "Build", goal: "Implement", steps: [{ description: "Code it" }] }],
+				questions: [
+					{
+						id: "q1",
+						text: "Legacy text?",
+						options: [
+							{ id: "a", label: "A", recommended: true },
+							{ id: "b", label: "B" },
+						],
+					},
+				],
+				gates: passingPlanGates(),
+			},
+			undefined,
+			undefined,
+			{ ui: {} },
+		)
+
+		expect(errText(result)).toContain("questions.0.question must be a string")
+	})
+})
+
 describe("update_ferment_scope_field via registerLifecycleTools", () => {
 	function createRegisteredHarness() {
 		const storage = new FermentEventStore(mkdtempSync(join(tmpdir(), "ferment-update-scope-test-")))
@@ -490,7 +632,6 @@ describe("completeFerment", () => {
 			reason: "no_auth",
 			detail: "missing api key",
 		})
-		// pi.getFlag returns undefined (no ferment-oneshot) → askUser routes to TUI.
 		const select = vi.fn(async () => "Ship without a grade")
 		const piWithUi = { ...h.pi, getFlag: vi.fn(() => undefined) } as unknown as ExtensionAPI
 		const ctx = { ui: { select } }
@@ -526,12 +667,37 @@ describe("completeFerment", () => {
 			{ pi: piWithUi, ctx },
 		)
 
+		expect(select).toHaveBeenCalled()
 		expect(errText(result)).toContain("user declined ungraded ship")
 		expect(h.storage.get(h.fermentId)?.status).toBe("abandoned")
 		expect(h.storage.get(h.fermentId)?.grade).toBeUndefined()
 	})
 
-	it("one-shot: judge unavailable → abandon directly without prompting", async () => {
+	it("interactive: judge unavailable + user cancels prompt → leaves ferment uncompleted", async () => {
+		const h = createHarness()
+		createTerminalFerment(h)
+		vi.mocked(mockJudgeJourneyGrade).mockResolvedValueOnce({
+			ok: false,
+			reason: "empty_response",
+		})
+		const select = vi.fn(async () => undefined)
+		const piWithUi = { ...h.pi, getFlag: vi.fn(() => undefined) } as unknown as ExtensionAPI
+		const ctx = { ui: { select } }
+
+		const result = await completeFerment(
+			h.runtime,
+			{ ferment_id: h.fermentId, final_summary: "done", gates: passingFermentGates() },
+			{ pi: piWithUi, ctx },
+		)
+
+		expect(select).toHaveBeenCalled()
+		expect(errText(result)).toContain("user did not authorize ungraded ship")
+		expect(h.storage.get(h.fermentId)?.status).not.toBe("complete")
+		expect(h.storage.get(h.fermentId)?.status).not.toBe("abandoned")
+		expect(h.storage.get(h.fermentId)?.grade).toBeUndefined()
+	})
+
+	it("one-shot: judge unavailable → ships with unavailable=true without prompting", async () => {
 		const h = createHarness()
 		createTerminalFerment(h)
 		vi.mocked(mockJudgeJourneyGrade).mockResolvedValueOnce({
@@ -551,7 +717,8 @@ describe("completeFerment", () => {
 		)
 
 		expect(select).not.toHaveBeenCalled()
-		expect(errText(result)).toContain("one-shot mode")
-		expect(h.storage.get(h.fermentId)?.status).toBe("abandoned")
+		expect(okText(result)).toContain("Final grade: B (unavailable)")
+		expect(h.storage.get(h.fermentId)?.status).toBe("complete")
+		expect(h.storage.get(h.fermentId)?.grade?.unavailable).toBe(true)
 	})
 })

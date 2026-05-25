@@ -126,9 +126,9 @@ export const ScopingQuestionSchema = Type.Object({
 			},
 		),
 	),
-	text: Type.String({
+	question: Type.String({
 		description:
-			"The decision-blocking question shown to the user. Do not ask preference-survey questions when a safe default can be assumed; a user request to be thorough with questions does not make default choices decision-blocking.",
+			"Canonical question sentence shown to the user. Use this field name for propose_ferment_scoping. Do not ask preference-survey questions when a safe default can be assumed; a user request to be thorough with questions does not make default choices decision-blocking.",
 	}),
 	options: Type.Optional(
 		Type.Array(ScopingQuestionOptionSchema, {
