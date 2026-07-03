@@ -17,16 +17,18 @@ import {
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 	type ExtensionContext,
+	type ExtensionUIContext,
 	defineTool,
 	getAgentDir,
 } from "@earendil-works/pi-coding-agent"
-import { Text } from "@earendil-works/pi-tui"
+import { Key, Text, isKeyRelease, matchesKey } from "@earendil-works/pi-tui"
 import { Type } from "typebox"
 import { isToolExpanded, registerToolCall } from "../../expand-state.js"
 import { filterThinkingForDisplay } from "../hide-thinking.js"
 import { sessionHasImages } from "../model-guard.js"
 import { KIMCHI_DEV_PROVIDER, MODEL_CAPABILITIES } from "../orchestration/model-registry/index.js"
 import { getMultiModelEnabled } from "../prompt-construction/prompt-enrichment.js"
+import { isRawInputCaptureActive } from "../shared-input.js"
 import { trackSubagentSpawned } from "../telemetry/index.js"
 import { AgentManager, buildAgentOutcome } from "./manager/agent-manager.js"
 import {
@@ -381,11 +383,17 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number): stri
 			: record.result
 		: "No output."
 
+	const note =
+		record.status === "stopped"
+			? "The user stopped this agent manually (Ctrl+X). Do not retry or reason about the stop — continue with other work or return control to the user."
+			: null
+
 	return [
 		"<task-notification>",
 		`<task-id>${record.id}</task-id>`,
 		record.toolCallId ? `<tool-use-id>${escapeXml(record.toolCallId)}</tool-use-id>` : null,
 		record.outputFile ? `<output-file>${escapeXml(record.outputFile)}</output-file>` : null,
+		note ? `<note>${escapeXml(note)}</note>` : null,
 		`<status>${escapeXml(status)}</status>`,
 		`<summary>Agent "${escapeXml(record.description)}" ${record.status}</summary>`,
 		`<result>${escapeXml(resultPreview)}</result>`,
@@ -799,10 +807,19 @@ export default function (pi: ExtensionAPI) {
 
 	pi.events.emit("subagents:ready", {})
 
+	let unsubCtrlB: (() => void) | undefined
+	let unsubKill: (() => void) | undefined
+	let currentUi: ExtensionUIContext | undefined
+
 	const widget = new AgentWidget(manager, agentActivity)
 	const listUserVisibleAgents = () => manager.listAgents().filter((a) => a.visibility !== "system")
 
 	pi.on("session_shutdown", async () => {
+		unsubCtrlB?.()
+		unsubCtrlB = undefined
+		unsubKill?.()
+		unsubKill = undefined
+		currentUi = undefined
 		manager.abortAll()
 		budgetRetryCandidates.clear()
 		for (const timer of pendingNudges.values()) clearTimeout(timer)
@@ -823,6 +840,47 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_execution_start", async (_event, ctx) => {
 		widget.setUICtx(ctx.ui as UICtx)
 		widget.onTurnStart()
+
+		if (ctx.hasUI) {
+			const newUi = ctx.ui as ExtensionUIContext
+			// Re-subscribe if the UI context changed (e.g. after a session switch).
+			// The terminal-input handler must use the live UI reference, not a
+			// stale closure captured from the first invocation.
+			if (newUi !== currentUi) {
+				unsubCtrlB?.()
+				unsubKill?.()
+				currentUi = newUi
+				unsubCtrlB = newUi.onTerminalInput((data) => {
+					if (isRawInputCaptureActive()) return undefined
+					if (!matchesKey(data, Key.ctrl("b")) || isKeyRelease(data)) return undefined
+
+					const foreground = manager.listAgents().filter((a) => a.status === "running" && !a.isBackground)
+					if (foreground.length === 0) return undefined
+
+					let detached = 0
+					for (const a of foreground) {
+						if (manager.detachToBackground(a.id)) detached++
+					}
+					if (detached === 0) return undefined
+					currentUi?.notify(`${detached} agent${detached > 1 ? "s" : ""} sent to background`, "info")
+					return { consume: true }
+				})
+
+				// Ctrl+X: kill the most recently spawned running background agent.
+				unsubKill = newUi.onTerminalInput((data) => {
+					if (isRawInputCaptureActive()) return undefined
+					if (!matchesKey(data, Key.ctrl("x")) || isKeyRelease(data)) return undefined
+
+					const bgRunning = manager.listAgents().filter((a) => a.status === "running" && a.isBackground)
+					if (bgRunning.length === 0) return undefined
+
+					const target = bgRunning[0]
+					manager.abort(target.id)
+					currentUi?.notify(`Stopped ${getDisplayName(target.type)} agent`, "info")
+					return { consume: true }
+				})
+			}
+		}
 	})
 
 	const buildTypeListText = () => {
@@ -1000,12 +1058,12 @@ ${AGENT_TOOL_GUIDELINES}`,
 					const frame = SPINNER[details.spinnerFrame ?? 0]
 					const s = stats(details)
 					let line = theme.fg("accent", frame) + (s ? ` ${s}` : "")
-					line += `\n${theme.fg("dim", `  ⎿  ${details.activity ?? "thinking..."}`)}`
+					line += `\n${theme.fg("dim", `  ⎿  ${details.activity ?? "thinking..."}`)}  ${theme.fg("muted", "(ctrl+b to run in background)")}`
 					return new Text(line, 0, 0)
 				}
 
 				if (details.status === "background") {
-					return new Text(theme.fg("dim", `  ⎿  Running in background (ID: ${details.agentId})`), 0, 0)
+					return new Text(theme.fg("dim", `  ⎿  Background agent running (ID: ${details.agentId})`), 0, 0)
 				}
 
 				if (details.status === "completed" || details.status === "steered") {
@@ -1256,8 +1314,10 @@ ${AGENT_TOOL_GUIDELINES}`,
 				let spinnerFrame = 0
 				const startedAt = Date.now()
 				let fgId: string | undefined
+				let fgDetached = false
 
 				const streamUpdate = () => {
+					if (fgDetached) return
 					const details: AgentDetails = {
 						...detailBase,
 						toolUses: fgState.toolUses,
@@ -1297,7 +1357,6 @@ ${AGENT_TOOL_GUIDELINES}`,
 
 				streamUpdate()
 
-				let record: AgentRecord
 				let childSessionFile: string | undefined
 				const parentSessionDir = ctx.sessionManager.getSessionDir()
 				try {
@@ -1311,11 +1370,18 @@ ${AGENT_TOOL_GUIDELINES}`,
 					const detail = err instanceof Error ? err.message : String(err)
 					return textResult(`Failed to pre-write Agent session file under ${parentSessionDir}: ${detail}`)
 				}
+
+				let detachResolve: (() => void) | undefined
+				const detachPromise = new Promise<"detached">((resolve) => {
+					detachResolve = () => resolve("detached")
+				})
+
+				let spawnedId: string
 				try {
-					record = await manager.spawnAndWait(pi, ctx, subagentType, effectivePrompt, {
+					spawnedId = manager.spawn(pi, ctx, subagentType, effectivePrompt, {
 						description: params.description as string,
 						visibility,
-						model: model as Parameters<typeof manager.spawnAndWait>[4]["model"],
+						model: model as Parameters<typeof manager.spawn>[4]["model"],
 						maxTurns: effectiveMaxTurns,
 						tokenBudget: resolvedConfig.tokenBudget,
 						taskRef,
@@ -1323,6 +1389,7 @@ ${AGENT_TOOL_GUIDELINES}`,
 						isolated,
 						inheritContext,
 						thinkingLevel: thinking,
+						isBackground: false,
 						sessionFile: childSessionFile,
 						sessionDir: parentSessionDir,
 						signal,
@@ -1333,6 +1400,79 @@ ${AGENT_TOOL_GUIDELINES}`,
 					return textResult(err instanceof Error ? err.message : String(err))
 				}
 
+				// biome-ignore lint/style/noNonNullAssertion: spawn() just inserted this id into the agents map
+				const record = manager.getRecord(spawnedId)!
+				fgId = spawnedId
+				record.detachResolver = detachResolve
+
+				// biome-ignore lint/style/noNonNullAssertion: promise is always set after spawn() calls startAgent()
+				const raceResult = await Promise.race([record.promise!.then(() => "completed" as const), detachPromise])
+
+				if (raceResult === "detached") {
+					fgDetached = true
+					clearInterval(spinnerInterval)
+
+					const outputFile = createOutputFilePath(
+						ctx.cwd,
+						spawnedId,
+						ctx.sessionManager.getSessionId(),
+						parentSessionDir,
+					)
+					record.outputFile = outputFile
+					record.toolCallId = toolCallId
+					writeInitialEntry(outputFile, spawnedId, params.prompt as string, ctx.cwd)
+					if (record.session) {
+						record.outputCleanup = streamToOutputFile(
+							record.session as Parameters<typeof streamToOutputFile>[0],
+							outputFile,
+							spawnedId,
+							ctx.cwd,
+						)
+					}
+
+					const joinMode = resolveJoinMode(getDefaultJoinMode(), true)
+					if (record && joinMode) {
+						record.joinMode = joinMode
+					}
+					if (explicitTokenBudget != null) {
+						budgetRetryCandidates.set(spawnedId, {
+							budget: explicitTokenBudget,
+							subagentType,
+							description: params.description as string,
+							prompt: params.prompt as string,
+						})
+					}
+					if (joinMode != null && joinMode !== "async") {
+						currentBatchAgents.push({ id: spawnedId, joinMode })
+						if (batchFinalizeTimer) clearTimeout(batchFinalizeTimer)
+						batchFinalizeTimer = setTimeout(finalizeBatch, 100)
+					}
+
+					widget.ensureTimer()
+					widget.update()
+
+					pi.events.emit("subagents:backgrounded", {
+						id: spawnedId,
+						type: subagentType,
+						description: params.description,
+						visibility,
+					})
+
+					return textResult(
+						`Agent sent to background by the user (Ctrl+B).\nAgent ID: ${spawnedId}\nType: ${displayName}\nDescription: ${params.description}\n${outputFile ? `Output file: ${outputFile}\n` : ""}\nThe agent continues running in the background. You will be notified when it completes.\nDo NOT call get_subagent_result now — that would block and defeat the purpose of backgrounding. Continue with other independent work, or stop your turn and return control to the user. The completion notification will contain the results.`,
+						{
+							...detailBase,
+							toolUses: fgState.toolUses,
+							tokens: formatLifetimeTokens(fgState),
+							durationMs: Date.now() - startedAt,
+							status: "background" as const,
+							agentId: spawnedId,
+						},
+					)
+				}
+
+				// Normal completion path
+				record.detachResolver = undefined
 				clearInterval(spinnerInterval)
 
 				if (fgId) {
@@ -1738,7 +1878,8 @@ ${AGENT_TOOL_GUIDELINES}`,
 		const options = agents.map((a) => {
 			const dn = getDisplayName(a.type)
 			const dur = formatDuration(a.startedAt, a.completedAt)
-			return `${dn} (${a.description}) · ${a.toolUses} tools · ${a.status} · ${dur}`
+			const bgLabel = a.isBackground && a.status === "running" ? " [background]" : ""
+			return `${dn} (${a.description}) · ${a.toolUses} tools · ${a.status}${bgLabel} · ${dur}`
 		})
 
 		const choice = await ctx.ui.select("Running agents", options)
