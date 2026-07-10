@@ -263,7 +263,7 @@ export function syncProviderModels(
 	modelsJsonPath: string,
 	providerId: string,
 	models: PiModelConfig[],
-	providerConfig?: { api?: string; baseUrl?: string },
+	providerConfig?: { api?: string; baseUrl?: string; apiKey?: string },
 ): void {
 	let config: { providers?: Record<string, { api?: string; baseUrl?: string; models?: PiModelConfig[] }> } = {}
 	if (existsSync(modelsJsonPath)) {

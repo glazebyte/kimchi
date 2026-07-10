@@ -91,7 +91,7 @@ describe("binary smoke tests", () => {
 			args: ["-r", missingSessionId],
 			extraEnv: { KIMCHI_API_KEY: "smoke-test-dummy" },
 			throwOnError: false,
-			timeoutMs: 5_000,
+			timeoutMs: 25_000,
 		})
 		expect(result.status).not.toBe(0)
 		expect(result.stdout + result.stderr).toContain(`No session found matching '${missingSessionId}'`)

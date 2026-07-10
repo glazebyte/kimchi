@@ -70,6 +70,7 @@ import piiRedactionExtension from "./extensions/pii-redaction/index.js"
 import pluginPackageHooksAdapter from "./extensions/plugin-package-hook-adapter/index.js"
 import promptEnrichmentExtension from "./extensions/prompt-construction/prompt-enrichment.js"
 import promptSummaryExtension from "./extensions/prompt-summary.js"
+import providerSettingsExtension from "./extensions/provider-settings.js"
 import questionnaireExtension from "./extensions/questionnaire/index.js"
 import reportBugExtension from "./extensions/report-bug.js"
 import requestTimingExtension from "./extensions/request-timing.js"
@@ -589,6 +590,7 @@ try {
 				{ id: "tools.web_search", factory: webSearchExtension },
 			] satisfies ManagedExtensionFactory[]),
 			modelSwitchExtension,
+			providerSettingsExtension,
 			modelGuardExtension,
 			orphanToolResultRepairExtension,
 			orphanToolResultSanitizerExtension,

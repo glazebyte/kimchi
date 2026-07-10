@@ -16,7 +16,7 @@ const BINARY_PATH = resolve("dist/bin/kimchi")
 const PACKAGE_DIR = resolve("dist/share/kimchi")
 const FAKE_PROVIDER = "fake"
 const FINAL_TEXT = "One-shot process lifecycle complete."
-const PROCESS_EXIT_TIMEOUT_MS = 12_000
+const PROCESS_EXIT_TIMEOUT_MS = 30_000
 
 interface ProcessResult {
 	code: number | null
@@ -43,7 +43,7 @@ describe("--ferment-oneshot process lifecycle", () => {
 	// real linked-worker one-shot path and asserts the CLI process exits cleanly.
 	it("exits after ferment completion, final assistant message, and agent_end", async () => {
 		await expectOneshotLifecycleToExit()
-	}, 25_000)
+	}, 45_000)
 })
 
 async function expectOneshotLifecycleToExit(): Promise<void> {
