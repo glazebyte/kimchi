@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { estimateContextTokens } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/compaction.js"
 import { map9RouterModelToConfig, probe9RouterModels } from "./9router.js"
 
 function makeFetchMock(responder: (url: string, init?: RequestInit) => unknown): typeof fetch {
@@ -86,5 +87,65 @@ describe("9Router Integration Discovery", () => {
 		await expect(probe9RouterModels(undefined, "key", { fetch: fetchImpl, throwOnError: true })).rejects.toThrow(
 			"HTTP error 500",
 		)
+	})
+})
+
+describe("9Router Context Usage Heuristic (Patched)", () => {
+	it("uses character estimation when usage tokens are missing or zero", () => {
+		const messages: Record<string, unknown>[] = [
+			{
+				role: "user",
+				content: [{ type: "text", text: "Hello world" }],
+				timestamp: Date.now(),
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "Hi there" }],
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+		]
+
+		const result = estimateContextTokens(messages as unknown as Parameters<typeof estimateContextTokens>[0])
+		// Total characters: "Hello world" (11) + "Hi there" (8) = 19
+		// 11/4 = 3 + 8/4 = 2 => 5 tokens estimated.
+		expect(result.tokens).toBeGreaterThan(0)
+		expect(result.usageTokens).toBe(0)
+	})
+
+	it("uses provider usage when assistant returns valid non-zero tokens", () => {
+		const messages: Record<string, unknown>[] = [
+			{
+				role: "user",
+				content: [{ type: "text", text: "Hello world" }],
+				timestamp: Date.now(),
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "Hi there" }],
+				usage: {
+					input: 10,
+					output: 5,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 15,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+		]
+
+		const result = estimateContextTokens(messages as unknown as Parameters<typeof estimateContextTokens>[0])
+		expect(result.tokens).toBe(15)
+		expect(result.usageTokens).toBe(15)
 	})
 })
